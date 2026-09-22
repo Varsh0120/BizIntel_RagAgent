@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: bizintel-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: AUTH_API_KEY
+        sync: false
+      - key: DATABASE_API_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        value: documents
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL_NAME
+        value: openai/gpt-oss-20b
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: CHROMA_PATH
+        value: /var/data/chroma
+    disk:
+      name: chroma-data
+      mountPath: /var/data
+      sizeGB: 1
+
+  - type: web
+    name: bizintel-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
