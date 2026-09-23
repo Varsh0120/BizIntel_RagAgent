@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     chroma_path: str = "./chroma_vector_db"
 
     # Embeddings
-    embedding_model_name: str = "BAAI/bge-small-en-v1.5"
+    embedding_model_name: str = (
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
 
     # Chunking
     chunk_size: int = 500

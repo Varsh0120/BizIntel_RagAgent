@@ -1464,7 +1464,7 @@ async def upload_document(
     filename = _safe_filename(
         file.filename or "upload"
     )
-
+    logger.info('filename...', filename)
     extension = Path(filename).suffix.lower()
 
     if extension not in settings.allowed_extensions_set:
@@ -1484,7 +1484,7 @@ async def upload_document(
         contents = await file.read(
             settings.max_upload_bytes + 1
         )
-
+        logger.info('contents...', contents)
         if not contents:
             raise HTTPException(
                 status_code=400,
@@ -1501,7 +1501,9 @@ async def upload_document(
             filename=filename,
             contents=contents,
         )
-
+        for chunk in chunks:
+            logger.info('chunk...', chunk)
+            
         if not chunks:
             raise HTTPException(
                 status_code=400,
@@ -1512,10 +1514,14 @@ async def upload_document(
             )
 
         document_id = str(uuid.uuid4())
+        
+        logger.info('document_id...', document_id)
+        
         storage_path = (
             f"{user['id']}/{document_id}-{filename}"
         )
-
+        logger.info('storage_path...', storage_path)
+        
         supabase_db_client.storage.from_(
             settings.storage_bucket
         ).upload(
@@ -1529,7 +1535,7 @@ async def upload_document(
                 "upsert": "false",
             },
         )
-
+        logger.info('before response..........')
         response = (
             supabase_db_client
             .table("documents")
@@ -1545,23 +1551,23 @@ async def upload_document(
             )
             .execute()
         )
-
+        logger.info('before if not response.data:..........')
         if not response.data:
             raise RuntimeError(
                 "Document record creation failed."
             )
-
+        logger.info('before stored = _store_chunks(:..........')
         stored = _store_chunks(
             chunks=chunks,
             user_id=user["id"],
             document_id=document_id,
         )
-
+        logger.info('before checking stored == 0 ..........', stored)
         if stored == 0:
             raise RuntimeError(
                 "No usable chunks were stored."
             )
-
+        logger.info('stored ..........', stored)
         update_response = (
             supabase_db_client
             .table("documents")
@@ -1575,12 +1581,12 @@ async def upload_document(
             .eq("user_id", user["id"])
             .execute()
         )
-
+        logger.info('before if not update_response ..........', update_response.data)
         if not update_response.data:
             raise RuntimeError(
                 "Document status update failed."
             )
-
+        logger.info('before returning status completed ..........')
         return {
             "status": "completed",
             "uploaded_file_name": filename,
@@ -1590,15 +1596,18 @@ async def upload_document(
         }
 
     except HTTPException:
+        logger.exception('HTTPException ..........')
         raise
 
     except json.JSONDecodeError:
+        logger.exception('json.JSONDecodeError ..........')
         raise HTTPException(
             status_code=400,
             detail="Invalid JSON file.",
         )
 
     except pd.errors.ParserError:
+        logger.exception('pd.errors.ParserError ..........')
         raise HTTPException(
             status_code=400,
             detail="Invalid CSV file.",
@@ -1615,7 +1624,7 @@ async def upload_document(
                 "document_id": document_id,
             },
         )
-
+        logger.exception('before if document_id ..........')
         if document_id:
             try:
                 (
@@ -1630,7 +1639,7 @@ async def upload_document(
                 logger.exception(
                     "Document cleanup failed"
                 )
-
+        logger.exception('before if storage_path ..........')
         if storage_path:
             try:
                 supabase_db_client.storage.from_(
@@ -1640,8 +1649,8 @@ async def upload_document(
                 logger.exception(
                     "Storage cleanup failed"
                 )
-
-        raise HTTPException(
+        logger.info('HTTPException setting status_code to 500 ..........')
+        raise HTTPException(    
             status_code=500,
             detail="Upload failed. Please try again.",
         ) from exc    
