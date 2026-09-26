@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional
 from unstructured.partition.auto import partition
 
 import tempfile
-import chromadb
+# Previous local vector store reference, kept intentionally:
+# import chromadb
 import httpx
 import pandas as pd
 from dotenv import load_dotenv
@@ -106,8 +107,8 @@ app = FastAPI(
     title="BizIntel RAG API",
     version="1.0.0",
     description=(
-        "Authenticated enterprise RAG API with ChromaDB retrieval, "
-        "cross-encoder reranking and grounded answer generation."
+        "Authenticated enterprise RAG API with Qdrant Cloud retrieval, "
+        "Jina embeddings/reranking and grounded answer generation."
     ),
 )
 
@@ -152,92 +153,195 @@ generation_client = httpx.Client(
     timeout=settings.groq_timeout_seconds,
 )
 
-chroma_client = chromadb.PersistentClient(
-    path=settings.chroma_path
-)
+vector_db_provider = settings.vector_db_provider.lower()
+embedding_provider = settings.embedding_provider.lower()
+reranker_provider = settings.reranker_provider.lower()
 
-collection = chroma_client.get_or_create_collection(
-    name="enterprise_knowledge",
-    metadata={"hnsw:space": "cosine"},
-)
+qdrant_client = None
+qdrant_models = None
 
-
-
-_embedding_model = None
-
-
-def _get_embedding_model():
-    """
-    Lazy-load embeddings so app import, /health, and local startup do not
-    block on model initialization or a Hugging Face cache/network check.
-    """
-    global _embedding_model
-
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-
-        logger.info(
-            "Loading embedding model",
-            extra={"event": "embedding_model_loading"},
+if vector_db_provider == "qdrant":
+    # TODO: Configure QDRANT_CLOUD_URL and QDRANT_API_KEY in Render.
+    if not settings.qdrant_cloud_url or not settings.qdrant_api_key:
+        raise RuntimeError(
+            "Qdrant is enabled, but QDRANT_CLOUD_URL or "
+            "QDRANT_API_KEY is missing."
         )
 
-        _embedding_model = SentenceTransformer(
-            settings.embedding_model_name,
-            device="cpu",
+    from qdrant_client import QdrantClient
+    from qdrant_client import models as qdrant_models
+
+    qdrant_client = QdrantClient(
+        url=settings.qdrant_cloud_url,
+        api_key=settings.qdrant_api_key,
+        timeout=60,
+    )
+
+    if not qdrant_client.collection_exists(
+        settings.qdrant_collection
+    ):
+        qdrant_client.create_collection(
+            collection_name=settings.qdrant_collection,
+            vectors_config=qdrant_models.VectorParams(
+                size=settings.qdrant_vector_size,
+                distance=qdrant_models.Distance.COSINE,
+            ),
         )
 
-        logger.info(
-            "Embedding model loaded",
-            extra={"event": "embedding_model_loaded"},
-        )
+else:
+    raise RuntimeError(
+        "VECTOR_DB_PROVIDER must be 'qdrant' for this Render build."
+    )
 
-    return _embedding_model
+# Previous local Chroma reference, kept intentionally:
+# chroma_client = chromadb.PersistentClient(path=settings.chroma_path)
+# collection = chroma_client.get_or_create_collection(
+#     name="enterprise_knowledge",
+#     metadata={"hnsw:space": "cosine"},
+# )
+
+
+
+# Previous local embedding reference, kept intentionally:
+# _embedding_model = None
+# def _get_embedding_model():
+#     from sentence_transformers import SentenceTransformer
+#     return SentenceTransformer(settings.embedding_model_name, device="cpu")
 
 
 # ======================================================================
 # CROSS ENCODER
 # ======================================================================
 
-_reranker = None
+# Previous local reranker reference, kept intentionally:
+# _reranker = None
+# def _get_reranker():
+#     from sentence_transformers import CrossEncoder
+#     import torch
+#     return CrossEncoder(
+#         settings.reranker_model_name,
+#         activation_fn=torch.nn.Sigmoid(),
+#         device="cpu",
+#         max_length=512,
+#     )
 
 
-def _get_reranker():
-    """
-    Lazy-load the cross encoder.
+def _jina_headers() -> Dict[str, str]:
+    # TODO: Configure JINA_API_KEY in Render before using Jina.
+    if not settings.jina_api_key:
+        raise RuntimeError(
+            "Jina is enabled, but JINA_API_KEY is missing."
+        )
 
-    We deliberately don't load it during application import because:
-      - pytest should start quickly
-      - /health should work without downloading a model
-      - Render can start the API before the model is first needed
-    """
-    global _reranker
+    return {
+        "Authorization": f"Bearer {settings.jina_api_key}",
+        "Content-Type": "application/json",
+    }
 
-    if _reranker is None:
-        from sentence_transformers import CrossEncoder
-        import torch
 
-        logger.info(
-            "Loading cross encoder",
-            extra={
-                "event": "reranker_loading",
+def _embed_texts(texts: List[str]) -> List[List[float]]:
+    if not texts:
+        return []
+
+    if embedding_provider == "jina":
+        response = httpx.post(
+            "https://api.jina.ai/v1/embeddings",
+            headers=_jina_headers(),
+            json={
+                "model": settings.jina_embedding_model,
+                "input": texts,
             },
+            timeout=settings.jina_timeout_seconds,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        data = payload.get("data") or []
+
+        return [
+            item["embedding"]
+            for item in sorted(
+                data,
+                key=lambda item: item.get("index", 0),
+            )
+        ]
+
+    # Previous local embedding reference, kept intentionally:
+    # if embedding_provider == "local":
+    #     return _get_embedding_model().encode(
+    #         texts,
+    #         normalize_embeddings=True,
+    #         show_progress_bar=False,
+    #     ).tolist()
+
+    raise RuntimeError(
+        "EMBEDDING_PROVIDER must be 'jina' for this Render build."
+    )
+
+
+def _embed_query(text: str) -> List[float]:
+    embeddings = _embed_texts([text])
+
+    if not embeddings:
+        raise RuntimeError("Embedding provider returned no query vector.")
+
+    return embeddings[0]
+
+
+def _jina_rerank(
+    query: str,
+    candidates: List[dict],
+) -> List[dict]:
+    if not candidates:
+        return []
+
+    response = httpx.post(
+        "https://api.jina.ai/v1/rerank",
+        headers=_jina_headers(),
+        json={
+            "model": settings.jina_reranker_model,
+            "query": query,
+            "documents": [
+                candidate["text"]
+                for candidate in candidates
+            ],
+            "top_n": min(settings.top_k, len(candidates)),
+        },
+        timeout=settings.jina_timeout_seconds,
+    )
+    response.raise_for_status()
+
+    ranked = []
+
+    for item in response.json().get("results", []):
+        index = item.get("index")
+
+        if index is None or index >= len(candidates):
+            continue
+
+        rerank_score = float(
+            item.get(
+                "relevance_score",
+                item.get("score", 0.0),
+            )
         )
 
-        _reranker = CrossEncoder(
-            settings.reranker_model_name,
-            activation_fn=torch.nn.Sigmoid(),
-            device="cpu",
-            max_length=512,
+        candidate = candidates[index]
+        keyword_score = candidate["keyword_overlap"]
+        final_score = (
+            0.8 * rerank_score
+            + 0.2 * keyword_score
         )
 
-        logger.info(
-            "Cross encoder loaded",
-            extra={
-                "event": "reranker_loaded",
-            },
+        ranked.append(
+            {
+                **candidate,
+                "rerank_score": round(rerank_score, 4),
+                "final_score": round(final_score, 4),
+            }
         )
 
-    return _reranker
+    return ranked[: settings.top_k]
 
 
 # ======================================================================
@@ -849,37 +953,85 @@ def _store_chunks(
     if not documents:
         return 0
 
-    embeddings = _get_embedding_model().encode(
-        documents,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    ).tolist()
+    embeddings = _embed_texts(documents)
 
-    collection.add(
-        ids=ids,
-        documents=documents,
-        embeddings=embeddings,
-        metadatas=metadatas,
-    )
+    if vector_db_provider == "qdrant":
+        points = []
+
+        for point_id, text, embedding, metadata in zip(
+            ids,
+            documents,
+            embeddings,
+            metadatas,
+        ):
+            payload = {
+                **metadata,
+                "text": text,
+            }
+            points.append(
+                qdrant_models.PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload=payload,
+                )
+            )
+
+        qdrant_client.upsert(
+            collection_name=settings.qdrant_collection,
+            points=points,
+        )
+
+    # Previous local Chroma reference, kept intentionally:
+    # collection.add(
+    #     ids=ids,
+    #     documents=documents,
+    #     embeddings=embeddings,
+    #     metadatas=metadatas,
+    # )
 
     return len(documents)
 
 
 def _delete_document_vectors(user_id: str, document_id: str) -> None:
-    owned = collection.get(
-        where={"user_id": user_id},
-        include=["metadatas"],
-    )
-    vector_ids = [
-        vector_id
-        for vector_id, metadata in zip(
-            owned.get("ids", []),
-            owned.get("metadatas", []),
+    if vector_db_provider == "qdrant":
+        qdrant_client.delete(
+            collection_name=settings.qdrant_collection,
+            points_selector=qdrant_models.FilterSelector(
+                filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="user_id",
+                            match=qdrant_models.MatchValue(
+                                value=user_id,
+                            ),
+                        ),
+                        qdrant_models.FieldCondition(
+                            key="document_id",
+                            match=qdrant_models.MatchValue(
+                                value=document_id,
+                            ),
+                        ),
+                    ]
+                )
+            ),
         )
-        if metadata.get("document_id") == document_id
-    ]
-    if vector_ids:
-        collection.delete(ids=vector_ids)
+        return
+
+    # Previous local Chroma reference, kept intentionally:
+    # owned = collection.get(
+    #     where={"user_id": user_id},
+    #     include=["metadatas"],
+    # )
+    # vector_ids = [
+    #     vector_id
+    #     for vector_id, metadata in zip(
+    #         owned.get("ids", []),
+    #         owned.get("metadatas", []),
+    #     )
+    #     if metadata.get("document_id") == document_id
+    # ]
+    # if vector_ids:
+    #     collection.delete(ids=vector_ids)
 
 
 # ======================================================================
@@ -926,84 +1078,117 @@ def _distance_to_similarity(
     )
 
 
+def _vector_count() -> int:
+    if vector_db_provider == "qdrant":
+        result = qdrant_client.count(
+            collection_name=settings.qdrant_collection,
+            exact=True,
+        )
+
+        return int(result.count)
+
+    # Previous local Chroma reference, kept intentionally:
+    # return collection.count()
+    return 0
+
+
 def _retrieve_candidates(
     query: str,
     user_id: str,
     document_id: Optional[str] = None,
 ) -> List[dict]:
 
-    query_embedding = _get_embedding_model().encode(
-        query,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    ).tolist()
-
-    where = {"user_id": user_id}
-    if document_id:
-        where = {
-            "$and": [
-                {"user_id": user_id},
-                {"document_id": document_id},
-            ]
-        }
-
-    raw = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=max(settings.retrieve_n, settings.top_k),
-        where=where,
-        include=[
-            "documents",
-            "distances",
-            "metadatas",
-        ],
-    )
-
-    documents = raw.get(
-        "documents",
-        [[]],
-    )[0]
-
-    distances = raw.get(
-        "distances",
-        [[]],
-    )[0]
-
-    metadatas = raw.get(
-        "metadatas",
-        [[]],
-    )[0]
-
-    if not documents:
-        return []
+    query_embedding = _embed_query(query)
 
     query_tokens = _tokenize(query)
 
-    candidates = []
+    if vector_db_provider == "qdrant":
+        must = [
+            qdrant_models.FieldCondition(
+                key="user_id",
+                match=qdrant_models.MatchValue(value=user_id),
+            )
+        ]
 
-    for doc, distance, metadata in zip(
-        documents,
-        distances,
-        metadatas,
-    ):
-        similarity = _distance_to_similarity(
-            distance
-        )
+        if document_id:
+            must.append(
+                qdrant_models.FieldCondition(
+                    key="document_id",
+                    match=qdrant_models.MatchValue(
+                        value=document_id,
+                    ),
+                )
+            )
 
-        keyword_score = _keyword_overlap_score(
-            query_tokens,
-            doc,
-        )
+        query_filter = qdrant_models.Filter(must=must)
+        limit = max(settings.retrieve_n, settings.top_k)
 
-        candidates.append(
-            {
-                "text": doc,
-                "metadata": metadata,
-                "similarity": similarity,
-                "keyword_overlap": keyword_score,
+        try:
+            raw_points = qdrant_client.query_points(
+                collection_name=settings.qdrant_collection,
+                query=query_embedding,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+            ).points
+        except AttributeError:
+            raw_points = qdrant_client.search(
+                collection_name=settings.qdrant_collection,
+                query_vector=query_embedding,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+            )
+
+        candidates = []
+
+        for point in raw_points:
+            payload = point.payload or {}
+            text = payload.get("text", "")
+
+            if not text:
+                continue
+
+            metadata = {
+                key: value
+                for key, value in payload.items()
+                if key != "text"
             }
-        )
 
-    return candidates
+            similarity = float(getattr(point, "score", 0.0))
+            keyword_score = _keyword_overlap_score(
+                query_tokens,
+                text,
+            )
+
+            candidates.append(
+                {
+                    "text": text,
+                    "metadata": metadata,
+                    "similarity": similarity,
+                    "keyword_overlap": keyword_score,
+                }
+            )
+
+        return candidates
+
+    # Previous local Chroma reference, kept intentionally:
+    # where = {"user_id": user_id}
+    # if document_id:
+    #     where = {
+    #         "$and": [
+    #             {"user_id": user_id},
+    #             {"document_id": document_id},
+    #         ]
+    #     }
+    # raw = collection.query(
+    #     query_embeddings=[query_embedding],
+    #     n_results=max(settings.retrieve_n, settings.top_k),
+    #     where=where,
+    #     include=["documents", "distances", "metadatas"],
+    # )
+
+    return []
 
 # ======================================================================
 # CROSS-ENCODER RERANKING
@@ -1017,90 +1202,48 @@ def _rerank_candidates(
     if not candidates:
         return []
 
-    reranker = _get_reranker()
-
-    pairs = [
-        (
-            query,
-            candidate["text"],
-        )
-        for candidate in candidates
-    ]
-
-    scores = reranker.predict(
-        pairs,
-        show_progress_bar=False,
-        batch_size=8,
-    )
-
-    ranked = []
-
-    for candidate, score in zip(
-        candidates,
-        scores,
-    ):
-
-        rerank_score = float(score)
-
-        keyword_score = candidate[
-            "keyword_overlap"
-        ]
-
-        # Cross encoder is the primary ranking signal.
-        # Keyword overlap remains as a small explainability/tie-break signal.
-        final_score = (
-            0.8 * rerank_score
-            + 0.2 * keyword_score
+    if reranker_provider == "jina":
+        return _jina_rerank(
+            query=query,
+            candidates=candidates,
         )
 
-        ranked.append(
+    if reranker_provider == "none":
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                item["similarity"],
+                item["keyword_overlap"],
+            ),
+            reverse=True,
+        )
+
+        return [
             {
                 **candidate,
-                "rerank_score": round(
-                    rerank_score,
-                    4,
-                ),
+                "rerank_score": 0.0,
                 "final_score": round(
-                    final_score,
+                    candidate["similarity"],
                     4,
                 ),
             }
-        )
+            for candidate in ranked[: settings.top_k]
+        ]
 
-    ranked.sort(
-        key=lambda item: item["final_score"],
-        reverse=True,
+    # Previous local reranker reference, kept intentionally:
+    # if reranker_provider == "local":
+    #     reranker = _get_reranker()
+    #     pairs = [(query, candidate["text"]) for candidate in candidates]
+    #     scores = reranker.predict(
+    #         pairs,
+    #         show_progress_bar=False,
+    #         batch_size=8,
+    #     )
+    #     ...
+
+    raise RuntimeError(
+        "RERANKER_PROVIDER must be 'jina' or 'none' for this Render build."
     )
-
-    confident = [
-        item
-        for item in ranked
-        if item["rerank_score"]
-        >= settings.reranker_threshold
-    ]
-
-    if confident:
-        return confident[: settings.top_k]
-
-    keyword_supported = [
-        item
-        for item in ranked
-        if item["keyword_overlap"]
-        >= settings.keyword_fallback_threshold
-    ]
-
-    if keyword_supported:
-        return keyword_supported[: settings.top_k]
-
-    semantic_supported = [
-        item
-        for item in ranked
-        if item["similarity"]
-        >= settings.semantic_fallback_threshold
-    ]
-
-    return semantic_supported[: settings.top_k]
-
 
 def _retrieve_and_rerank(
     query: str,
@@ -1134,7 +1277,7 @@ def _retrieve_and_rerank(
             "latency_ms": latency_ms,
             "candidate_count": len(candidates),
             "ranked_count": len(ranked),
-            "collection_count": collection.count(),
+            "collection_count": _vector_count(),
             "candidate_sources": [
                 candidate["metadata"].get("source")
                 for candidate in candidates
@@ -1384,7 +1527,7 @@ async def readiness_check():
     checks = {
         "supabase": False,
         "generation": False,
-        "chroma": False,
+        "vector_db": False,
     }
 
     try:
@@ -1423,15 +1566,15 @@ async def readiness_check():
 
     try:
 
-        collection.count()
+        _vector_count()
 
-        checks["chroma"] = True
+        checks["vector_db"] = True
 
     except Exception:
         logger.exception(
-            "Chroma readiness check failed",
+            "Vector database readiness check failed",
             extra={
-                "event": "readiness_chroma_failed"
+                "event": "readiness_vector_db_failed"
             },
         )
 
@@ -1464,7 +1607,7 @@ async def upload_document(
     filename = _safe_filename(
         file.filename or "upload"
     )
-    logger.info('filename...', filename)
+
     extension = Path(filename).suffix.lower()
 
     if extension not in settings.allowed_extensions_set:
@@ -1484,7 +1627,7 @@ async def upload_document(
         contents = await file.read(
             settings.max_upload_bytes + 1
         )
-        logger.info('contents...', contents)
+
         if not contents:
             raise HTTPException(
                 status_code=400,
@@ -1501,9 +1644,7 @@ async def upload_document(
             filename=filename,
             contents=contents,
         )
-        for chunk in chunks:
-            logger.info('chunk...', chunk)
-            
+
         if not chunks:
             raise HTTPException(
                 status_code=400,
@@ -1514,14 +1655,10 @@ async def upload_document(
             )
 
         document_id = str(uuid.uuid4())
-        
-        logger.info('document_id...', document_id)
-        
         storage_path = (
             f"{user['id']}/{document_id}-{filename}"
         )
-        logger.info('storage_path...', storage_path)
-        
+
         supabase_db_client.storage.from_(
             settings.storage_bucket
         ).upload(
@@ -1535,7 +1672,7 @@ async def upload_document(
                 "upsert": "false",
             },
         )
-        logger.info('before response..........')
+
         response = (
             supabase_db_client
             .table("documents")
@@ -1551,23 +1688,23 @@ async def upload_document(
             )
             .execute()
         )
-        logger.info('before if not response.data:..........')
+
         if not response.data:
             raise RuntimeError(
                 "Document record creation failed."
             )
-        logger.info('before stored = _store_chunks(:..........')
+
         stored = _store_chunks(
             chunks=chunks,
             user_id=user["id"],
             document_id=document_id,
         )
-        logger.info('before checking stored == 0 ..........', stored)
+
         if stored == 0:
             raise RuntimeError(
                 "No usable chunks were stored."
             )
-        logger.info('stored ..........', stored)
+
         update_response = (
             supabase_db_client
             .table("documents")
@@ -1581,12 +1718,12 @@ async def upload_document(
             .eq("user_id", user["id"])
             .execute()
         )
-        logger.info('before if not update_response ..........', update_response.data)
+
         if not update_response.data:
             raise RuntimeError(
                 "Document status update failed."
             )
-        logger.info('before returning status completed ..........')
+
         return {
             "status": "completed",
             "uploaded_file_name": filename,
@@ -1596,18 +1733,15 @@ async def upload_document(
         }
 
     except HTTPException:
-        logger.exception('HTTPException ..........')
         raise
 
     except json.JSONDecodeError:
-        logger.exception('json.JSONDecodeError ..........')
         raise HTTPException(
             status_code=400,
             detail="Invalid JSON file.",
         )
 
     except pd.errors.ParserError:
-        logger.exception('pd.errors.ParserError ..........')
         raise HTTPException(
             status_code=400,
             detail="Invalid CSV file.",
@@ -1624,7 +1758,7 @@ async def upload_document(
                 "document_id": document_id,
             },
         )
-        logger.exception('before if document_id ..........')
+
         if document_id:
             try:
                 (
@@ -1639,7 +1773,7 @@ async def upload_document(
                 logger.exception(
                     "Document cleanup failed"
                 )
-        logger.exception('before if storage_path ..........')
+
         if storage_path:
             try:
                 supabase_db_client.storage.from_(
@@ -1649,8 +1783,8 @@ async def upload_document(
                 logger.exception(
                     "Storage cleanup failed"
                 )
-        logger.info('HTTPException setting status_code to 500 ..........')
-        raise HTTPException(    
+
+        raise HTTPException(
             status_code=500,
             detail="Upload failed. Please try again.",
         ) from exc    

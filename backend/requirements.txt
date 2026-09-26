@@ -1,4 +1,4 @@
-﻿aiohappyeyeballs==2.7.1
+aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
 aiosignal==1.4.0
 annotated-doc==0.0.5
@@ -13,8 +13,8 @@ build==1.6.1
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.1
-chroma-hnswlib==0.7.3
-chromadb==0.5.3
+# chroma-hnswlib==0.7.3  # Previous local Chroma dependency, kept intentionally
+# chromadb==0.5.3  # Previous local Chroma dependency, kept intentionally
 click==8.5.0
 cloudpickle==3.1.2
 colorama==0.4.6
@@ -120,7 +120,7 @@ rsa==4.9.1
 safetensors==0.8.0
 scikit-learn==1.9.1
 scipy==1.17.1
-sentence-transformers==6.1.0
+# sentence-transformers==6.1.0  # Previous local embedding/reranker dependency, kept intentionally
 shellingham==1.5.4
 six==1.17.0
 sniffio==1.3.1
@@ -136,9 +136,9 @@ sympy==1.14.0
 tenacity==8.5.0
 threadpoolctl==3.7.0
 tokenizers==0.23.2
-torch==2.14.0
+# torch==2.14.0  # Previous local model dependency, kept intentionally
 tqdm==4.70.1
-transformers==5.17.0
+# transformers==5.17.0  # Previous local model dependency, kept intentionally
 typer==0.27.2
 typing-inspection==0.4.4
 typing_extensions==4.16.0
@@ -152,7 +152,5 @@ websockets==15.0.1
 wrapt==2.4.1
 xlsxwriter==3.2.9
 yarl==1.25.1
-numba==0.67.0
-llvmlite==0.49.0
-unstructured-inference==1.1.1
-unstructured[all-docs]==0.18.32
+qdrant-client==1.12.1
+unstructured[all-docs]

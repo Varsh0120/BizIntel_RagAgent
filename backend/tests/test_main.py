@@ -13,6 +13,7 @@ additionally need real API keys and network access — that's intentionally
 kept separate so `pytest` works in CI without secrets.
 """
 
+from json.tool import main
 import os
 
 os.environ.setdefault("SUPABASE_URL", "https://dummy.supabase.co")
@@ -25,7 +26,7 @@ from pydantic import ValidationError
 import pytest
 import numpy as np
 
-import main
+import backend.main as main
 
 
 client = TestClient(main.app)

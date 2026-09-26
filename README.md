@@ -1,53 +1,42 @@
-# BizIntel
+# BizIntel — Private Document Intelligence RAG Agent
 
-BizIntel is a multi-user document question-answering application. Authenticated users can upload documents, select an indexed document, and ask questions grounded exclusively in retrieved document content.
+BizIntel is a private document-intelligence application that lets authenticated users upload business documents, retrieve relevant context, and ask grounded questions over their own files. It uses a Lovable/React frontend, FastAPI backend, Supabase authentication/storage/database, Qdrant Cloud vector search, Jina embeddings/reranking, and Groq answer generation.
 
-The application uses a React frontend, FastAPI backend, Supabase authentication and data storage, ChromaDB vector retrieval, sentence-transformer embeddings, cross-encoder reranking, and Groq for grounded answer generation.
+## Problem Statement
 
-## Features
+Business users often need answers from PDFs, Word files, spreadsheets, presentations, and text documents. Manual search is slow, and general chatbots may hallucinate answers from outside the uploaded file. BizIntel solves this by grounding answers in retrieved document chunks and returning a safe fallback when the answer is not available in the uploaded document.
 
-- Email/password registration and login through Supabase Auth
-- Supabase session restoration and logout
-- Authenticated FastAPI endpoints
-- User-scoped document and conversation access
+## Design Questions
+
+- How can document upload, retrieval, and question answering work end to end from one simple UI?
+- How can retrieval stay isolated by authenticated user and selected document?
+- How can answers be grounded only in uploaded document content?
+- How can the app run reliably on Render without local vector database memory/storage crashes?
+- How can API keys stay out of GitHub while still making deployment reproducible?
+
+## Key Features
+
+- Supabase email/password authentication
+- User-isolated document and conversation access
 - Document upload to Supabase Storage
-- Document metadata and conversation storage in Supabase
-- Text extraction from supported document formats
-- Chunking and embedding generation
-- Persistent ChromaDB vector indexing
-- Cosine-similarity retrieval
-- Cross-encoder reranking
-- Document-specific question answering
-- Retrieved source display
-- Conversation history
-- Exact no-context fallback:
+- Document metadata and conversation persistence in Supabase Database
+- Multi-format document extraction through `unstructured`
+- Chunk creation for retrieved context
+- Jina API embeddings
+- Qdrant Cloud vector storage and retrieval
+- Jina reranking
+- Groq answer generation
+- Strict no-context fallback when the answer is unavailable
+- FastAPI health/readiness endpoints
+- Docker and Render deployment support
 
-  > I could not find that information in the uploaded document.
-
-## Architecture
-
-```text
-React/Vite frontend
-        |
-        | Supabase access token
-        v
-FastAPI backend
-        |
-        +-- Supabase Auth
-        +-- Supabase Database
-        +-- Supabase Storage
-        +-- ChromaDB
-        +-- Sentence Transformers
-        +-- Cross-Encoder Reranker
-        +-- Groq Answer Generation
-```
-
-## Technology
+## Tech Stack
 
 ### Frontend
 
 - React
 - Vite
+- Lovable frontend structure
 - Supabase JavaScript client
 
 ### Backend
@@ -56,130 +45,142 @@ FastAPI backend
 - FastAPI
 - Uvicorn
 - Supabase Python client
-- ChromaDB
-- Sentence Transformers
-- Unstructured
-- Groq-compatible HTTP API
+- Qdrant Cloud
+- Jina Embeddings API
+- Jina Reranker API
+- Groq-compatible chat completions
+- LangChain text splitters
+- `unstructured` document parsing
 
-## Supported document formats
+### Deployment
 
-- Text: `.txt`, `.md`, `.markdown`
-- Structured data: `.csv`, `.json`
-- PDF: `.pdf`
-- Microsoft Word: `.doc`, `.docx`
-- Microsoft Excel: `.xls`, `.xlsx`
-- Microsoft PowerPoint: `.ppt`, `.pptx`
-- Web and markup: `.html`, `.htm`, `.xml`
-- Rich text: `.rtf`
+- Render Docker Web Service for backend
+- Render Static Site for frontend
+- Supabase Auth, Database, and Storage
+- Qdrant Cloud for vector persistence
 
-The default maximum upload size is 5 MB.
-
-## Project structure
+## System Architecture
 
 ```text
-biz-intel-agent/
-├── backend/
-│   ├── tests/
-│   ├── config.py
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── schema.sql
-│   └── .env.example
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   └── App.jsx
-│   │   ├── lib/
-│   │   │   ├── api.js
-│   │   │   └── supabase.js
-│   │   ├── index.css
-│   │   └── main.jsx
-│   ├── index.html
-│   ├── package.json
-│   ├── package-lock.json
-│   └── .env.example
-├── Dockerfile
-├── render.yaml
-└── README.md
+React/Vite Frontend
+   |
+   | Supabase access token
+   v
+FastAPI Backend on Render
+   |
+   +-- Supabase Auth: validate user
+   +-- Supabase Storage: store uploaded files
+   +-- Supabase Database: documents and conversations
+   +-- Document Parser: extract text
+   +-- Chunker: split text
+   +-- Jina Embeddings: create vectors
+   +-- Qdrant Cloud: store/search vectors
+   +-- Jina Reranker: rank retrieved chunks
+   +-- Groq: generate grounded answer
+   v
+Answer + source metadata returned to frontend
 ```
 
-## Prerequisites
+## RAG Flow
 
-- Python 3.11
-- Node.js and npm
-- Docker Desktop
-- Supabase project
-- Groq API key
-- Git
-- GitHub account
+1. User signs in through Supabase.
+2. User uploads a document.
+3. Backend validates the Supabase token.
+4. Backend validates file type and size.
+5. File is stored in Supabase Storage.
+6. Text is extracted from the uploaded file.
+7. Text is chunked.
+8. Chunks are embedded with Jina.
+9. Vectors and metadata are stored in Qdrant Cloud.
+10. User asks a question for a selected document.
+11. Query is embedded with Jina.
+12. Qdrant retrieves user-scoped and document-scoped chunks.
+13. Jina reranks the retrieved chunks.
+14. Groq generates an answer from only the retrieved context.
+15. If the answer is not present, the app returns the fallback response.
 
-## Backend configuration
+## Dashboard Features
 
-Create `backend/.env` from `backend/.env.example`.
+- Private authenticated workspace
+- Upload document button
+- Document list with processing/completed status
+- Conversation list
+- Selected-document Q&A
+- Source-aware answer display
+- User identity display
+- User-isolated retrieval indicator
 
-Required secret variables:
+## Supported File Types
 
 ```text
-SUPABASE_URL
-AUTH_API_KEY
-DATABASE_API_KEY
-GROQ_API_KEY
+.txt, .md, .markdown, .csv, .json, .pdf, .docx, .xlsx, .xls,
+.pptx, .ppt, .doc, .html, .htm, .xml, .rtf
 ```
 
-Important configuration:
+Default upload limit: `5 MB`.
 
-```text
+## Environment Variables
+
+Create `backend/.env` locally from `backend/.env.example`. Do not commit real `.env` files.
+
+Required backend variables:
+
+```env
+SUPABASE_URL=your_supabase_url
+AUTH_API_KEY=your_supabase_anon_or_publishable_key
+DATABASE_API_KEY=your_supabase_service_role_key
 STORAGE_BUCKET=documents
+GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL_NAME=openai/gpt-oss-20b
-CHROMA_PATH=./chroma_vector_db
-EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
+VECTOR_DB_PROVIDER=qdrant
+QDRANT_CLOUD_URL=your_qdrant_cloud_url
+QDRANT_API_KEY=your_qdrant_api_key
+QDRANT_COLLECTION=enterprise_knowledge
+QDRANT_VECTOR_SIZE=1024
+
+EMBEDDING_PROVIDER=jina
+JINA_API_KEY=your_jina_api_key
+JINA_EMBEDDING_MODEL=jina-embeddings-v3
+JINA_TIMEOUT_SECONDS=60
+
+RERANKER_PROVIDER=jina
+JINA_RERANKER_MODEL=jina-reranker-v2-base-multilingual
 ```
 
-Never commit `backend/.env`.
+Required frontend variables:
 
-## Frontend configuration
-
-Create `frontend/.env` from `frontend/.env.example`.
-
-```text
-VITE_SUPABASE_URL=your-supabase-project-url
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-VITE_API_BASE_URL=http://0.0.0.0:8000
+```env
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_API_BASE_URL=your_backend_url
 ```
 
-Only the Supabase anon/publishable key belongs in frontend configuration. Never put the service-role key in the frontend.
+## Installation
 
-## Supabase setup
-
-1. Create a Supabase project.
-2. Apply `backend/schema.sql` through the Supabase SQL Editor.
-3. Create the Storage bucket named `documents`.
-4. Configure the required Storage policies.
-5. Enable the required email/password authentication settings.
-6. Add local and production frontend URLs to the authentication URL configuration.
-
-## Local backend startup
+### Backend
 
 ```powershell
-cd backend
-..\.venv\Scripts\Activate.ps1
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+cd "C:\Users\91948\repo\biz_intel_agent - Copy\backend"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Backend URLs:
-
-- API: `http://127.0.0.1:8000`
-- Documentation: `http://127.0.0.1:8000/docs`
-- Health: `http://127.0.0.1:8000/health`
-- Readiness: `http://127.0.0.1:8000/ready`
-
-## Local frontend startup
+Health check:
 
 ```powershell
-cd frontend
+Invoke-WebRequest http://127.0.0.1:8000/health
+```
+
+### Frontend
+
+```powershell
+cd "C:\Users\91948\repo\biz_intel_agent - Copy\frontend"
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 Open:
@@ -188,138 +189,95 @@ Open:
 http://127.0.0.1:5173
 ```
 
-## Tests
-
-Run backend tests:
-
-```powershell
-cd backend
-..\.venv\Scripts\python.exe -m pytest -q
-```
-
-Compile backend modules:
-
-```powershell
-..\.venv\Scripts\python.exe -m py_compile main.py config.py
-```
-
-Build the frontend:
-
-```powershell
-cd frontend
-npm run build
-```
-
-Audit production frontend dependencies:
-
-```powershell
-npm audit --omit=dev
-```
-
 ## Docker
 
-Build the backend image from the repository root:
-
 ```powershell
-docker build --tag bizintel-api:latest .
+docker build -t bizintel-api .
+docker run --env-file backend/.env -p 8000:8000 bizintel-api
 ```
 
-Create persistent Chroma storage:
+## Render Deployment
 
-```powershell
-docker volume create bizintel-chroma
-```
+Backend:
 
-Run the container:
+- Runtime: Docker
+- Dockerfile: `Dockerfile`
+- Health check path: `/health`
+- Add backend environment variables in the Render Dashboard
+- Keep API keys only in Render Environment Variables
 
-```powershell
-docker run --detach `
-  --name bizintel-api `
-  --publish 8000:8000 `
-  --env-file backend\.env `
-  --env PORT=8000 `
-  --env CHROMA_PATH=/var/data/chroma `
-  --volume bizintel-chroma:/var/data `
-  bizintel-api:latest
-```
+Frontend:
 
-Test it:
+- Runtime: Static Site
+- Build command: `cd frontend && npm ci && npm run build`
+- Publish directory: `frontend/dist`
+- Set `VITE_API_BASE_URL` to the backend Render URL
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod http://127.0.0.1:8000/ready
-```
+After moving from Chroma to Qdrant Cloud, upload documents again because old local Chroma vectors are not stored in Qdrant.
 
-## Render deployment
+## Reproducibility
 
-Deploy the backend as a Docker web service using:
+1. Clone the repository.
+2. Create a Supabase project.
+3. Apply `backend/schema.sql`.
+4. Create a Supabase Storage bucket named `documents`.
+5. Create a Qdrant Cloud cluster and API key.
+6. Create a Jina API key.
+7. Create a Groq API key.
+8. Fill local `.env` files from examples.
+9. Install backend and frontend dependencies.
+10. Start backend and frontend.
+11. Upload a test document.
+12. Ask a question whose answer exists.
+13. Ask a question whose answer does not exist and verify fallback behavior.
 
-```text
-Dockerfile Path: ./Dockerfile
-Docker Build Context: .
-Health Check Path: /health
-```
+## Evaluation
 
-Configure:
+Recommended checks:
 
-```text
-CHROMA_PATH=/var/data/chroma
-```
+- Upload a small `.txt` file.
+- Upload a PDF or DOCX file.
+- Verify chunk count is stored.
+- Ask a direct factual question.
+- Ask a paraphrased question.
+- Ask a misspelled question.
+- Ask a question not present in the document.
+- Confirm the app does not answer from outside document context.
+- Confirm user A cannot retrieve user B's document chunks.
+- Confirm conversations are saved.
+- Check Render logs for upload, embedding, Qdrant upsert, retrieval, reranking, and answer generation.
 
-Attach a persistent disk:
+## Functionalities
 
-```text
-Mount path: /var/data
-```
+- Authentication
+- Document upload
+- Text extraction
+- Chunking
+- Embedding generation
+- Vector storage
+- User-scoped retrieval
+- Document-scoped retrieval
+- Reranking
+- Grounded answer generation
+- Conversation persistence
+- Safe fallback response
+- Render-compatible deployment
 
-Deploy the frontend as a static site:
+## Future Improvements
 
-```text
-Build command: cd frontend && npm ci && npm run build
-Publish directory: frontend/dist
-```
+- Page-level citations where extractor metadata supports it
+- Background ingestion jobs for large files
+- Upload progress tracking
+- Richer source display in the frontend
+- Hybrid keyword and vector retrieval
+- Automated retrieval evaluation set
+- CI checks for backend tests and frontend build
+- Larger document support with job queues
+- Better table-aware PDF and spreadsheet extraction
 
-Set the frontend backend URL:
+## Security Notes
 
-```text
-VITE_API_BASE_URL=https://your-backend-service.onrender.com
-```
-
-Set backend CORS:
-
-```text
-ALLOWED_ORIGINS=https://your-frontend-site.onrender.com
-```
-
-## Security
-
-- Protected backend routes validate Supabase bearer tokens.
-- Backend user identity is derived from the verified token.
-- Frontend-supplied user IDs are not trusted.
-- Document and conversation operations are scoped to the authenticated user.
-- Chroma metadata includes both user and document ownership.
-- Supabase tables use row-level security.
-- The Supabase service-role key is backend-only.
-- Retrieved document content is treated as untrusted data.
-- The answer model receives only retrieved document context.
-- Secrets and local vector data are excluded from Git and Docker builds.
-
-## Retrieval behavior
-
-Document chunks are embedded with:
-
-```text
-BAAI/bge-small-en-v1.5
-```
-
-ChromaDB uses cosine similarity. Candidates are filtered by authenticated user and selected document, then reranked with:
-
-```text
-cross-encoder/ms-marco-MiniLM-L-6-v2
-```
-
-Semantic embeddings provide tolerance for paraphrases, minor spelling mistakes, and imperfect grammar. If no candidate passes the configured relevance checks, the API returns the exact fallback response.
-
-## License
-
-No license has been specified for this project.
+- Never commit `.env` files.
+- Keep `DATABASE_API_KEY` server-side only.
+- Keep Qdrant, Jina, and Groq API keys in local `.env` or Render Environment Variables only.
+- Frontend should only use Supabase public/anon key and backend API URL.

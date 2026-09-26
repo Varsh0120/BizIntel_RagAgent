@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,12 +38,26 @@ class Settings(BaseSettings):
 )
 
     # Chroma
-    chroma_path: str = "./chroma_vector_db"
+    #chroma_path: str = "./chroma_vector_db"
 
-    # Embeddings
-    embedding_model_name: str = (
-        "sentence-transformers/all-MiniLM-L6-v2"
-    )
+    # Vector database provider.
+    # TODO: Set VECTOR_DB_PROVIDER=qdrant on Render after creating a
+
+    # Qdrant Cloud cluster and adding QDRANT_CLOUD_URL/QDRANT_API_KEY.
+    vector_db_provider: str = "qdrant"
+    qdrant_cloud_url: Optional[str] = None
+    qdrant_api_key: Optional[str] = None
+    qdrant_collection: str = "enterprise_knowledge"
+    qdrant_vector_size: int = 1024
+
+    # Embeddings 
+    # TODO: Set EMBEDDING_PROVIDER=jina on Render after adding JINA_API_KEY.
+    embedding_provider: str = "jina"
+    # Previous local embedding model reference only; active Jina model is jina_embedding_model below.
+    # embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    jina_api_key: Optional[str] = None
+    jina_embedding_model: str = "jina-embeddings-v3"
+    jina_timeout_seconds: int = 60
 
     # Chunking
     chunk_size: int = 500
@@ -54,9 +69,13 @@ class Settings(BaseSettings):
     reranker_threshold: float = 0.35
     semantic_fallback_threshold: float = 0.25
     keyword_fallback_threshold: float = 0.5
-    reranker_model_name: str = (
-        "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    )
+    # Previous local reranker model reference only; active Jina model is jina_reranker_model below.
+    # reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # TODO: Set RERANKER_PROVIDER=jina on Render after adding JINA_API_KEY.
+    # Use "local" to keep the existing cross-encoder behavior.
+    # Use "none" to skip reranking and rely on vector similarity.
+    reranker_provider: str = "jina"
+    jina_reranker_model: str = "jina-reranker-v2-base-multilingual"
 
     # Conversations
     conversation_history_turns: int = 3
@@ -107,3 +126,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     return Settings()
 settings = get_settings()
+
+

@@ -19,12 +19,28 @@ services:
         value: openai/gpt-oss-20b
       - key: ALLOWED_ORIGINS
         sync: false
-      - key: CHROMA_PATH
-        value: /var/data/chroma
-    disk:
-      name: chroma-data
-      mountPath: /var/data
-      sizeGB: 1
+      - key: VECTOR_DB_PROVIDER
+        value: qdrant
+      - key: QDRANT_CLOUD_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: QDRANT_COLLECTION
+        value: enterprise_knowledge
+      - key: QDRANT_VECTOR_SIZE
+        value: 1024
+      - key: EMBEDDING_PROVIDER
+        value: jina
+      - key: JINA_API_KEY
+        sync: false
+      - key: JINA_EMBEDDING_MODEL
+        value: jina-embeddings-v3
+      - key: JINA_TIMEOUT_SECONDS
+        value: 60
+      - key: RERANKER_PROVIDER
+        value: jina
+      - key: JINA_RERANKER_MODEL
+        value: jina-reranker-v2-base-multilingual
 
   - type: web
     name: bizintel-web
