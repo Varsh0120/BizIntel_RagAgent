@@ -86,6 +86,15 @@ class JsonFormatter(logging.Formatter):
         if hasattr(record, "session_id"):
             payload["session_id"] = record.session_id
 
+        if hasattr(record, "status_code"):
+            payload["status_code"] = record.status_code
+
+        if hasattr(record, "error_detail"):
+            payload["error_detail"] = record.error_detail
+
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+
         return json.dumps(payload, default=str)
 
 
@@ -253,10 +262,31 @@ def _embed_texts(texts: List[str]) -> List[List[float]]:
             },
             timeout=settings.jina_timeout_seconds,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.exception(
+                "Jina embedding request failed",
+                extra={
+                    "event": "jina_embedding_failed",
+                    "status_code": exc.response.status_code,
+                    "error_detail": exc.response.text[:500],
+                },
+            )
+            raise
 
         payload = response.json()
         data = payload.get("data") or []
+
+        if len(data) != len(texts):
+            logger.error(
+                "Jina embedding count mismatch",
+                extra={
+                    "event": "jina_embedding_count_mismatch",
+                    "error_detail": f"expected={len(texts)} actual={len(data)}",
+                },
+            )
+            raise RuntimeError("Jina embedding provider returned an unexpected number of vectors.")
 
         return [
             item["embedding"]
@@ -309,7 +339,18 @@ def _jina_rerank(
         },
         timeout=settings.jina_timeout_seconds,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.exception(
+            "Jina rerank request failed",
+            extra={
+                "event": "jina_rerank_failed",
+                "status_code": exc.response.status_code,
+                "error_detail": exc.response.text[:500],
+            },
+        )
+        raise
 
     ranked = []
 
@@ -953,7 +994,25 @@ def _store_chunks(
     if not documents:
         return 0
 
+    logger.info(
+        "Embedding document chunks",
+        extra={
+            "event": "document_embedding_started",
+            "document_id": document_id,
+            "chunk_count": len(documents),
+        },
+    )
+
     embeddings = _embed_texts(documents)
+
+    logger.info(
+        "Document chunks embedded",
+        extra={
+            "event": "document_embedding_completed",
+            "document_id": document_id,
+            "chunk_count": len(embeddings),
+        },
+    )
 
     if vector_db_provider == "qdrant":
         points = []
@@ -976,9 +1035,38 @@ def _store_chunks(
                 )
             )
 
-        qdrant_client.upsert(
-            collection_name=settings.qdrant_collection,
-            points=points,
+        logger.info(
+            "Upserting document chunks to Qdrant",
+            extra={
+                "event": "qdrant_upsert_started",
+                "document_id": document_id,
+                "chunk_count": len(points),
+            },
+        )
+
+        try:
+            qdrant_client.upsert(
+                collection_name=settings.qdrant_collection,
+                points=points,
+            )
+        except Exception:
+            logger.exception(
+                "Qdrant upsert failed",
+                extra={
+                    "event": "qdrant_upsert_failed",
+                    "document_id": document_id,
+                    "chunk_count": len(points),
+                },
+            )
+            raise
+
+        logger.info(
+            "Qdrant upsert completed",
+            extra={
+                "event": "qdrant_upsert_completed",
+                "document_id": document_id,
+                "chunk_count": len(points),
+            },
         )
 
     # Previous local Chroma reference, kept intentionally:
